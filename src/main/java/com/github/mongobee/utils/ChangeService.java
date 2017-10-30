@@ -3,13 +3,20 @@ package com.github.mongobee.utils;
 import com.github.mongobee.changeset.ChangeEntry;
 import com.github.mongobee.changeset.ChangeLog;
 import com.github.mongobee.changeset.ChangeSet;
+import com.github.mongobee.exception.MongobeeChangeSetException;
 import org.reflections.Reflections;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import static java.util.Arrays.asList;
 
@@ -49,7 +56,7 @@ public class ChangeService {
     return filteredChangeLogs;
   }
 
-  public List<Method> fetchChangeSets(final Class<?> type) {
+  public List<Method> fetchChangeSets(final Class<?> type) throws MongobeeChangeSetException {
     final List<Method> changeSets = filterChangeSetAnnotation(asList(type.getDeclaredMethods()));
     final List<Method> filteredChangeSets = (List<Method>) filterByActiveProfiles(changeSets);
 
@@ -83,14 +90,23 @@ public class ChangeService {
   }
 
   private boolean matchesActiveSpringProfile(AnnotatedElement element) {
-    if (element.isAnnotationPresent(Profile.class)) {
-      Profile profiles = element.getAnnotation(Profile.class);
-      List<String> values = asList(profiles.value());
-      return ListUtils.intersection(activeProfiles, values).size() > 0 ? true : false;
-
-    } else {
+    if (!ClassUtils.isPresent("org.springframework.context.annotation.Profile", null)) {
+      return true;
+    }
+    if (!element.isAnnotationPresent(Profile.class)) {
       return true; // no-profiled changeset always matches
     }
+    List<String> profiles = asList(element.getAnnotation(Profile.class).value());
+    for (String profile : profiles) {
+      if (profile != null && profile.length() > 0 && profile.charAt(0) == '!') {
+        if (!activeProfiles.contains(profile.substring(1))) {
+          return true;
+        }
+      } else if (activeProfiles.contains(profile)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private List<?> filterByActiveProfiles(Collection<? extends AnnotatedElement> annotated) {
@@ -103,10 +119,16 @@ public class ChangeService {
     return filtered;
   }
 
-  private List<Method> filterChangeSetAnnotation(List<Method> allMethods) {
+  private List<Method> filterChangeSetAnnotation(List<Method> allMethods) throws MongobeeChangeSetException {
+    final Set<String> changeSetIds = new HashSet<>();
     final List<Method> changesetMethods = new ArrayList<>();
     for (final Method method : allMethods) {
       if (method.isAnnotationPresent(ChangeSet.class)) {
+        String id = method.getAnnotation(ChangeSet.class).id();
+        if (changeSetIds.contains(id)) {
+          throw new MongobeeChangeSetException(String.format("Duplicated changeset id found: '%s'", id));
+        }
+        changeSetIds.add(id);
         changesetMethods.add(method);
       }
     }
